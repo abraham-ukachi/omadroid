@@ -13,6 +13,7 @@
 
 
 # `omadroid`
+![omadroid, every Android version one key away](./doc/screenshot.png)
 
 > IMPORTANT: This is a work in progress and subject to major changes until version 1.0.
 
