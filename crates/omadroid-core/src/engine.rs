@@ -25,6 +25,8 @@ use crate::versions::Version;
 pub struct Status {
     pub session: String,
     pub container: String,
+    /// `MAINLINE` or `VANILLA`, as Waydroid reports it.
+    pub vendor: String,
 }
 
 impl Status {
@@ -44,6 +46,7 @@ impl Default for Status {
         Status {
             session: "STOPPED".into(),
             container: "STOPPED".into(),
+            vendor: String::new(),
         }
     }
 }
@@ -87,8 +90,18 @@ pub fn status() -> Status {
         if let Some(value) = line.strip_prefix("Container:") {
             status.container = value.trim().to_string();
         }
+        if let Some(value) = line.strip_prefix("Vendor type:") {
+            status.vendor = value.trim().to_string();
+        }
     }
     status
+}
+
+/// `waydroid --version` (the release, not the image): `1.6.3`.
+pub fn version() -> Option<String> {
+    let out = run("waydroid", &["--version"]).ok()?;
+    let version = out.trim();
+    (!version.is_empty()).then(|| version.to_string())
 }
 
 /// The `images_path` in a `waydroid.cfg`.
@@ -340,7 +353,8 @@ mod tests {
         assert!(!Status::default().running());
         assert!(Status {
             session: "RUNNING".into(),
-            container: "FROZEN".into()
+            container: "FROZEN".into(),
+            ..Status::default()
         }
         .running());
     }

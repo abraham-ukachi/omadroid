@@ -3,15 +3,30 @@
 //! The app: the Slint UI (`ui/app.slint`) wired to `omadroid-core`.
 //! Everything that touches Waydroid or the network runs on a worker thread, so
 //! the window never waits on a four-second container start or a 1.5 GB image.
+//!
+//! A second, much smaller thread keeps Android on the phone panel: it asks
+//! Hyprland where omadroid's window is, where the Waydroid window is, and moves
+//! the latter onto the rectangle the panel occupies. That is the closest a
+//! Wayland app can get to hosting another app's window (see `desktop`).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use omadroid_core::catalog::{self, Release};
-use omadroid_core::{engine, install, paths, theme, versions, Progress, Rgb, Store, Theme as OmaTheme};
+use omadroid_core::desktop::{self, Rect};
+use omadroid_core::{
+    bootstrap, engine, install, paths, theme, versions, Progress, Rgb, Store, Theme as OmaTheme,
+};
 use slint::{ModelRc, Timer, TimerMode, VecModel};
 
 slint::include_modules!();
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// How often the phone window is nudged back onto the panel.
+const RING: Duration = Duration::from_millis(400);
 
 /// What the window asks the worker for.
 enum Cmd {
@@ -21,6 +36,7 @@ enum Cmd {
     Install(String),
     Remove(String),
     Show,
+    Setup,
 }
 
 /// What the worker tells the window.
@@ -35,8 +51,55 @@ enum Ev {
 /// The list of versions, plus what Waydroid is doing right now.
 struct Snapshot {
     rows: Vec<VersionRow>,
+    /// `Android 13 · running`, worn under the app's name.
+    caption: String,
     status: String,
     running: bool,
+    /// `waydroid 1.6.3 · android 13 · MAINLINE`, for the about tab.
+    engine: String,
+    needs_setup: bool,
+    setup_detail: String,
+}
+
+/// Where the phone panel is, in window coordinates.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct Phone {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+/// `Android 13 · running`, `running`, `stopped`.
+fn status_line(installed: &[omadroid_core::Version], running: bool) -> String {
+    match versions::active(installed) {
+        Some(version) if running => format!("{} · running", version.title()),
+        _ if running => "running".to_string(),
+        _ => "stopped".to_string(),
+    }
+}
+
+/// `waydroid 1.6.3 · android 13 · MAINLINE`, or what is missing.
+fn engine_line(deps: &bootstrap::Deps, status: &engine::Status) -> String {
+    if !deps.waydroid {
+        return "waydroid is not installed".to_string();
+    }
+    let mut parts = vec![match engine::version() {
+        Some(version) => format!("waydroid {version}"),
+        None => "waydroid".to_string(),
+    }];
+
+    if status.running() {
+        if let Some(android) = engine::android_release() {
+            parts.push(format!("android {android}"));
+        }
+    } else {
+        parts.push("android stopped".to_string());
+    }
+    if !status.vendor.is_empty() {
+        parts.push(status.vendor.to_lowercase());
+    }
+    parts.join(" · ")
 }
 
 /// Builds the rows the window shows: installed versions first, then the ones
@@ -59,6 +122,7 @@ fn snapshot(store: &Store, releases: &[Release]) -> Snapshot {
                 subtitle: version.subtitle().into(),
                 state: if live { "live" } else { "installed" }.into(),
                 live,
+                download: false,
             },
         ));
     }
@@ -76,6 +140,7 @@ fn snapshot(store: &Store, releases: &[Release]) -> Snapshot {
                 subtitle: release.subtitle().into(),
                 state: "download".into(),
                 live: false,
+                download: true,
             },
         ));
     }
@@ -84,16 +149,17 @@ fn snapshot(store: &Store, releases: &[Release]) -> Snapshot {
     let rows = rows.into_iter().map(|(_, _, row)| row).collect::<Vec<_>>();
 
     let running = status.running();
-    let status_text = match versions::active(&installed) {
-        Some(version) if running => format!("{} · running", version.title()),
-        _ if running => "running".to_string(),
-        _ => "stopped".to_string(),
-    };
+    let short = status_line(&installed, running);
+    let deps = bootstrap::detect();
 
     Snapshot {
+        caption: format!("{VERSION} · {short}"),
+        status: short,
         rows,
-        status: status_text,
         running,
+        engine: engine_line(&deps, &status),
+        needs_setup: !deps.ready(),
+        setup_detail: deps.describe(),
     }
 }
 
@@ -156,6 +222,26 @@ fn worker(cmds: Receiver<Cmd>, events: Sender<Ev>) {
                 send_snapshot(&events, &store, &releases);
             }
 
+            // The one button on a machine that has never run Waydroid.
+            Cmd::Setup => {
+                let _ = events.send(Ev::Busy(true));
+                let progress_events = events.clone();
+                let mut progress = |line: &str| {
+                    let _ = progress_events.send(Ev::Status(line.to_string()));
+                };
+                match bootstrap::install(&mut progress) {
+                    Ok(()) => {
+                        let _ = events.send(Ev::Status("waydroid is installed".into()));
+                    }
+                    Err(error) => {
+                        let _ = events.send(Ev::Notice(error));
+                    }
+                }
+                let _ = events.send(Ev::Busy(false));
+                let _ = refresh(&mut store, &mut releases, &mut fetched);
+                send_snapshot(&events, &store, &releases);
+            }
+
             Cmd::Start(id) => {
                 let Some(version) = versions::installed(&store)
                     .into_iter()
@@ -192,6 +278,7 @@ fn worker(cmds: Receiver<Cmd>, events: Sender<Ev>) {
                 let _ = events.send(Ev::Busy(true));
                 match engine::stop() {
                     Ok(()) => {
+                        let _ = desktop::release();
                         let _ = events.send(Ev::Status("stopped".into()));
                     }
                     Err(error) => {
@@ -256,6 +343,65 @@ fn worker(cmds: Receiver<Cmd>, events: Sender<Ev>) {
     }
 }
 
+/// Keeps the Waydroid window on the phone panel for as long as Android runs.
+/// It only talks to Hyprland when the two rectangles disagree, so the usual
+/// round is two `hyprctl clients -j` calls per tick.
+fn follow(phone: Arc<Mutex<Phone>>, live: Arc<AtomicBool>) {
+    if !desktop::available() {
+        eprintln!("omadroid: hyprctl is not there, so android keeps its own window");
+        return;
+    }
+    let mut shaped = false;
+    let mut warned = false;
+    loop {
+        std::thread::sleep(RING);
+        let Some(window) = desktop::host() else {
+            continue;
+        };
+        // Once per run: the window is floated and made tall enough for a phone.
+        if !shaped {
+            shaped = true;
+            if let Err(error) = desktop::shape_host(&window) {
+                eprintln!("omadroid: cannot float the window: {error}");
+            }
+        }
+        if !live.load(Ordering::Relaxed) || window.hidden {
+            continue;
+        }
+        let panel = *phone.lock().unwrap_or_else(|error| error.into_inner());
+        if panel.w < 40.0 || panel.h < 40.0 {
+            continue;
+        }
+        // Two pixels in, so omadroid's accent border stays visible around it.
+        let target = Rect {
+            x: window.rect.x + panel.x.round() as i64 + 2,
+            y: window.rect.y + panel.y.round() as i64 + 2,
+            w: (panel.w.round() as i64 - 4).max(1),
+            h: (panel.h.round() as i64 - 4).max(1),
+        };
+        let Some(device) = desktop::device() else {
+            continue;
+        };
+        // Never move omadroid's own window, whatever the compositor answers.
+        if device.address == window.address {
+            continue;
+        }
+        if device.rect != target {
+            if let Err(error) = desktop::place(&device, target) {
+                if !warned {
+                    eprintln!("omadroid: cannot place the phone window: {error}");
+                    warned = true;
+                }
+            }
+        }
+        // Above the tiling layout, so clicking the list does not bury the
+        // phone. Retried because a pin can be refused while it is still mapping.
+        if !device.pinned {
+            let _ = desktop::pin(&device);
+        }
+    }
+}
+
 fn color(rgb: Rgb) -> slint::Color {
     slint::Color::from_argb_encoded(rgb.argb())
 }
@@ -280,6 +426,7 @@ fn paint(ui: &AppWindow, radius: bool) {
 pub fn run() -> Result<(), slint::PlatformError> {
     let ui = AppWindow::new()?;
     paint(&ui, true);
+    ui.set_app_version(VERSION.into());
 
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let (ev_tx, ev_rx) = mpsc::channel();
@@ -288,6 +435,17 @@ pub fn run() -> Result<(), slint::PlatformError> {
         .name("omadroid".into())
         .spawn(move || worker(cmd_rx, ev_tx))
         .expect("the worker starts");
+
+    let phone = Arc::new(Mutex::new(Phone::default()));
+    let live = Arc::new(AtomicBool::new(false));
+    {
+        let phone = Arc::clone(&phone);
+        let live = Arc::clone(&live);
+        std::thread::Builder::new()
+            .name("phone".into())
+            .spawn(move || follow(phone, live))
+            .expect("the phone thread starts");
+    }
 
     let _ = cmd_tx.send(Cmd::Refresh);
 
@@ -328,15 +486,25 @@ pub fn run() -> Result<(), slint::PlatformError> {
         });
     }
     {
+        let tx = cmd_tx.clone();
+        ui.on_setup(move || {
+            let _ = tx.send(Cmd::Setup);
+        });
+    }
+    {
         let weak = ui.as_weak();
+        let live = Arc::clone(&live);
         ui.on_quit(move || {
+            let _ = desktop::release();
+            live.store(false, Ordering::Relaxed);
             if let Some(ui) = weak.upgrade() {
                 let _ = ui.hide();
             }
         });
     }
 
-    // One timer drains the worker's answers; a second follows the theme.
+    // One timer drains the worker's answers and reads the phone's rectangle;
+    // a second follows the theme.
     let weak = ui.as_weak();
     let events = Timer::default();
     events.start(TimerMode::Repeated, Duration::from_millis(120), move || {
@@ -347,8 +515,13 @@ pub fn run() -> Result<(), slint::PlatformError> {
             match event {
                 Ev::Snapshot(snapshot) => {
                     let count = snapshot.rows.len();
+                    live.store(snapshot.running, Ordering::Relaxed);
                     ui.set_rows(ModelRc::new(VecModel::from(snapshot.rows)));
+                    ui.set_caption(snapshot.caption.into());
                     ui.set_status_text(snapshot.status.into());
+                    ui.set_engine_text(snapshot.engine.into());
+                    ui.set_needs_setup(snapshot.needs_setup);
+                    ui.set_setup_detail(snapshot.setup_detail.into());
                     ui.set_running(snapshot.running);
                     if count == 0 || ui.get_selected() as usize >= count {
                         ui.set_selected(0);
@@ -364,6 +537,25 @@ pub fn run() -> Result<(), slint::PlatformError> {
                 Ev::Notice(text) => ui.set_notice(text.into()),
                 Ev::Status(text) => ui.set_status_text(text.into()),
             }
+        }
+
+        // The phone's size comes from here, not from a binding: a layout that
+        // measured itself would loop. A phone is 47% as wide as it is tall,
+        // fills the window, and stops at 780px like a real one on a desk.
+        let scale = ui.window().scale_factor().max(0.5);
+        let logical = ui.window().size().height as f32 / scale;
+        let height = (logical - 166.0).clamp(300.0, 780.0);
+        ui.set_panel_h(height);
+        ui.set_panel_w((height * 0.47).max(180.0));
+
+        let panel = Phone {
+            x: ui.get_phone_x(),
+            y: ui.get_phone_y(),
+            w: ui.get_phone_w(),
+            h: ui.get_phone_h(),
+        };
+        if let Ok(mut current) = phone.lock() {
+            *current = panel;
         }
     });
 

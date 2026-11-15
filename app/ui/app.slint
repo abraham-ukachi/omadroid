@@ -1,4 +1,4 @@
-import { ListView } from "std-widgets.slint";
+import { ListView, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import "fonts/iAWriterMonoS-Regular.ttf";
 
@@ -10,27 +10,129 @@ export struct VersionRow {
     subtitle: string,
     state: string,
     live: bool,
+    download: bool,
+}
+
+// One line of the key sheet: the key, then what it does.
+component KeyRow inherits Rectangle {
+    height: 24px;
+    background: transparent;
+    in property <string> k: "";
+    in property <string> v: "";
+
+    HorizontalLayout {
+        spacing: 14px;
+        Text {
+            width: 104px;
+            text: root.k;
+            color: Theme.accent;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.v;
+            color: Theme.fg;
+            font-size: 11px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+    }
+}
+
+// A tab of the settings pane.
+component Tab inherits Rectangle {
+    width: 78px;
+    height: 26px;
+    border-radius: Theme.radius * 1px;
+    background: root.chosen ? Theme.panel : transparent;
+    border-width: 1px;
+    border-color: root.chosen ? Theme.accent : Theme.border;
+    in property <string> label: "";
+    in property <bool> chosen: false;
+    callback pick();
+
+    Text {
+        text: root.label;
+        color: root.chosen ? Theme.accent : Theme.muted;
+        font-size: 11px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    TouchArea {
+        clicked => {
+            root.pick();
+        }
+    }
+}
+
+// The settings icon: three sliders. Drawn, because a font is a bad place to
+// keep an icon you depend on.
+component Sliders inherits Rectangle {
+    width: 30px;
+    height: 30px;
+    border-radius: Theme.radius * 1px;
+    background: hit.has-hover ? Theme.panel : transparent;
+    border-width: 1px;
+    border-color: root.marked ? Theme.accent : Theme.border;
+    in property <bool> marked: false;
+    callback pick();
+
+    Rectangle { x: 8px; y: 9px; width: 14px; height: 1px; background: Theme.muted; }
+    Rectangle { x: 8px; y: 15px; width: 14px; height: 1px; background: Theme.muted; }
+    Rectangle { x: 8px; y: 21px; width: 14px; height: 1px; background: Theme.muted; }
+
+    Rectangle { x: 10px; y: 7px; width: 4px; height: 4px; border-radius: 2px; background: root.marked ? Theme.accent : Theme.fg; }
+    Rectangle { x: 15px; y: 13px; width: 4px; height: 4px; border-radius: 2px; background: root.marked ? Theme.accent : Theme.fg; }
+    Rectangle { x: 12px; y: 19px; width: 4px; height: 4px; border-radius: 2px; background: root.marked ? Theme.accent : Theme.fg; }
+
+    hit := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.pick();
+        }
+    }
 }
 
 // One window, one job: pick the Android version, and it is on the desktop.
 export component AppWindow inherits Window {
     title: "omadroid";
-    preferred-width: 460px;
-    preferred-height: 820px;
-    min-width: 420px;
-    min-height: 640px;
+    preferred-width: 800px;
+    preferred-height: 880px;
+    min-width: 660px;
+    min-height: 600px;
     background: Theme.bg;
     default-font-family: "iA Writer Mono S";
     default-font-size: 13px;
 
     in property <[VersionRow]> rows;
     in-out property <int> selected: 0;
+    in property <string> caption: "";
     in property <string> status-text: "starting";
+    in property <string> engine-text: "";
+    in property <string> app-version: "";
     in property <string> notice: "";
+    in property <string> setup-detail: "";
     in property <bool> running: false;
     in property <bool> busy: false;
+    in property <bool> needs-setup: false;
     in property <float> progress: 0;
-    in-out property <bool> help: false;
+    in-out property <bool> settings: false;
+    in-out property <int> tab: 0;
+
+    // Read back by the app, so Hyprland can put Android on the panel.
+    in-out property <length> phone-x: 0px;
+    in-out property <length> phone-y: 0px;
+    in-out property <length> phone-w: 0px;
+    in-out property <length> phone-h: 0px;
+
+    // The phone fills the window vertically, but a phone is a phone: it stops
+    // growing at 780px, which is the height of a real one on a desk. Rust sizes
+    // it from the window, because a layout cannot measure itself without
+    // looping.
+    in-out property <length> panel-w: 330px;
+    in-out property <length> panel-h: 700px;
 
     callback refresh();
     callback launch(string);
@@ -38,6 +140,7 @@ export component AppWindow inherits Window {
     callback install(string);
     callback remove(string);
     callback show-ui();
+    callback setup();
     callback quit();
 
     // Space (or S) starts the selected version, which is the whole point.
@@ -89,8 +192,9 @@ export component AppWindow inherits Window {
             root.refresh();
             return true;
         }
-        if (key == "?") {
-            root.help = true;
+        if (key == "," || key == "?") {
+            root.settings = !root.settings;
+            root.tab = key == "?" ? 1 : 0;
             return true;
         }
         if (key == "q") {
@@ -110,10 +214,8 @@ export component AppWindow inherits Window {
         }
 
         key-pressed(event) => {
-            if (root.help) {
-                if (event.text == "?" || event.text == "q") {
-                    root.help = false;
-                }
+            if (root.settings && (event.text == "Escape" || event.text == ",")) {
+                root.settings = false;
                 return accept;
             }
             if (root.act(event.text)) {
@@ -130,33 +232,48 @@ export component AppWindow inherits Window {
             VerticalLayout {
                 spacing: 0px;
 
-                // Title bar
+                // The app bar: name, the version and state under it, settings.
                 Rectangle {
-                    height: 56px;
+                    height: 64px;
                     background: Theme.bg;
 
                     HorizontalLayout {
                         padding-left: 20px;
-                        padding-right: 20px;
-                        spacing: 10px;
+                        padding-right: 14px;
+                        spacing: 12px;
                         alignment: start;
 
-                        Text {
-                            text: "omadroid";
-                            color: Theme.fg;
-                            font-size: 15px;
-                            font-weight: 700;
-                            vertical-alignment: center;
+                        VerticalLayout {
+                            vertical-stretch: 1;
+                            alignment: center;
+                            spacing: 2px;
+                            horizontal-stretch: 1;
+
+                            Text {
+                                text: "omadroid";
+                                color: Theme.fg;
+                                font-size: 16px;
+                                font-weight: 700;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: root.caption;
+                                color: root.running ? Theme.accent : Theme.muted;
+                                font-size: 10px;
+                                overflow: elide;
+                            }
                         }
 
-                        // The accent is the whole state signal: running or not.
-                        Text {
-                            text: root.status-text;
-                            color: root.running ? Theme.accent : Theme.muted;
-                            font-size: 11px;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                            overflow: elide;
+                        VerticalLayout {
+                            width: 30px;
+                            alignment: center;
+
+                            Sliders {
+                                marked: root.settings;
+                                pick => {
+                                    root.settings = !root.settings;
+                                }
+                            }
                         }
                     }
                 }
@@ -166,53 +283,49 @@ export component AppWindow inherits Window {
                     background: Theme.border;
                 }
 
-                // The phone and the list
+                // The phone, and the versions (or the settings) beside it.
                 HorizontalLayout {
                     padding-left: 20px;
                     padding-right: 20px;
-                    padding-top: 10px;
-                    padding-bottom: 8px;
+                    padding-top: 14px;
+                    padding-bottom: 12px;
                     spacing: 18px;
                     vertical-stretch: 1;
 
                     VerticalLayout {
-                        width: 152px;
-                        spacing: 10px;
+                        width: root.panel-w;
+                        spacing: 8px;
                         alignment: start;
 
-                        Rectangle {
-                            width: 152px;
-                            height: 320px;
+                        phone := Rectangle {
+                            width: 100%;
+                            height: root.panel-h;
                             border-radius: Theme.radius * 1px;
                             background: Theme.key;
                             border-width: 2px;
                             border-color: root.running ? Theme.accent : Theme.border;
+                            clip: true;
 
+                            // What is here when Android is not on the panel yet.
                             VerticalLayout {
-                                padding: 12px;
+                                padding: 14px;
                                 spacing: 10px;
 
-                                Rectangle {
-                                    height: 12px;
-                                    background: transparent;
-
-                                    Text {
-                                        text: root.running ? "live" : "stopped";
-                                        color: root.running ? Theme.accent : Theme.muted;
-                                        font-size: 10px;
-                                        horizontal-alignment: center;
-                                    }
+                                Text {
+                                    text: root.running ? "android" : "not running";
+                                    color: root.running ? Theme.accent : Theme.muted;
+                                    font-size: 10px;
+                                    horizontal-alignment: center;
                                 }
 
-                                // The home screen: twelve app tiles.
                                 VerticalLayout {
-                                    spacing: 7px;
+                                    spacing: 8px;
 
-                                    for band in 3 : HorizontalLayout {
-                                        spacing: 7px;
+                                    for band in 5 : HorizontalLayout {
+                                        spacing: 8px;
 
                                         for tile in 4 : Rectangle {
-                                            height: 26px;
+                                            height: 30px;
                                             border-radius: Theme.radius * 1px;
                                             background: root.running ? Theme.panel : Theme.key;
                                             border-width: 1px;
@@ -240,65 +353,291 @@ export component AppWindow inherits Window {
                             text: "android in a container, not an emulator";
                             color: Theme.muted;
                             font-size: 9px;
-                            wrap: word-wrap;
                             horizontal-alignment: center;
+                            wrap: word-wrap;
                         }
                     }
 
+                    // The right column is the list, or the settings pane.
                     VerticalLayout {
+                        horizontal-stretch: 1;
                         vertical-stretch: 1;
-                        spacing: 6px;
+                        spacing: 10px;
 
-                        Text {
-                            text: "versions";
-                            color: Theme.muted;
-                            font-size: 10px;
+                        HorizontalLayout {
+                            spacing: 10px;
+                            height: 22px;
+
+                            Text {
+                                text: root.settings ? "settings" : "versions";
+                                color: Theme.muted;
+                                font-size: 10px;
+                                vertical-alignment: center;
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+
+                                Rectangle {
+                                    height: 1px;
+                                    background: Theme.border;
+                                }
+                            }
+
+                            Text {
+                                visible: root.settings;
+                                text: "esc";
+                                color: Theme.muted;
+                                font-size: 10px;
+                                vertical-alignment: center;
+                            }
                         }
 
-                        ListView {
+                        HorizontalLayout {
+                            visible: root.settings;
+                            spacing: 6px;
+                            height: 26px;
+
+                            Tab {
+                                label: "versions";
+                                chosen: root.tab == 0;
+                                pick => {
+                                    root.tab = 0;
+                                }
+                            }
+                            Tab {
+                                label: "keys";
+                                chosen: root.tab == 1;
+                                pick => {
+                                    root.tab = 1;
+                                }
+                            }
+                            Tab {
+                                label: "about";
+                                chosen: root.tab == 2;
+                                pick => {
+                                    root.tab = 2;
+                                }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: transparent;
+                            }
+                        }
+
+                        Rectangle {
                             vertical-stretch: 1;
+                            background: transparent;
+                            clip: true;
 
-                            for row[i] in root.rows : Rectangle {
-                                height: 58px;
-                                border-radius: Theme.radius * 1px;
-                                background: i == root.selected ? Theme.panel : transparent;
-                                border-width: 1px;
-                                border-color: Theme.border;
+                            // The list: tap a row to select it, tap download to
+                            // fetch it.
+                            ListView {
+                                visible: !root.settings;
 
-                                TouchArea {
-                                    clicked => {
-                                        root.selected = i;
+                                for row[i] in root.rows : Rectangle {
+                                    height: 66px;
+                                    background: transparent;
+
+                                    card := Rectangle {
+                                        y: 3px;
+                                        width: 100%;
+                                        height: 60px;
+                                        border-radius: Theme.radius * 1px;
+                                        background: i == root.selected ? Theme.panel : Theme.key;
+                                        border-width: 1px;
+                                        border-color: i == root.selected ? Theme.accent : Theme.border;
+
+                                        TouchArea {
+                                            clicked => {
+                                                root.selected = i;
+                                            }
+                                            mouse-cursor: pointer;
+                                        }
+
+                                        HorizontalLayout {
+                                            padding-left: 14px;
+                                            padding-right: 8px;
+                                            spacing: 8px;
+
+                                            VerticalLayout {
+                                                alignment: center;
+                                                spacing: 2px;
+                                                horizontal-stretch: 1;
+
+                                                Text {
+                                                    text: row.title;
+                                                    color: row.live ? Theme.accent : Theme.fg;
+                                                    font-size: 13px;
+                                                    overflow: elide;
+                                                }
+                                                Text {
+                                                    text: row.subtitle;
+                                                    color: Theme.muted;
+                                                    font-size: 10px;
+                                                    overflow: elide;
+                                                }
+                                            }
+
+                                            // The state, on the right and readable,
+                                            // and the one word that is a button.
+                                            VerticalLayout {
+                                                width: 96px;
+                                                alignment: center;
+
+                                                pill := Rectangle {
+                                                    width: 100%;
+                                                    height: 28px;
+                                                    border-radius: Theme.radius * 1px;
+                                                    background: row.download && pill-hit.has-hover ? Theme.panel : transparent;
+                                                    border-width: row.download ? 1px : 0px;
+                                                    border-color: row.live ? Theme.accent : Theme.border;
+
+                                                    Text {
+                                                        x: 0px;
+                                                        width: parent.width - 8px;
+                                                        text: row.state;
+                                                        color: row.live ? Theme.accent : (row.download ? Theme.fg : Theme.muted);
+                                                        font-size: 12px;
+                                                        horizontal-alignment: right;
+                                                        vertical-alignment: center;
+                                                    }
+
+                                                    pill-hit := TouchArea {
+                                                        enabled: row.download;
+                                                        mouse-cursor: pointer;
+                                                        clicked => {
+                                                            root.selected = i;
+                                                            root.install(row.id);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
+                            }
 
-                                HorizontalLayout {
-                                    padding-left: 12px;
-                                    padding-right: 12px;
-                                    spacing: 8px;
+                            // The settings pane, in three tabs.
+                            ScrollView {
+                                visible: root.settings;
+                                content-width: self.width;
 
-                                    VerticalLayout {
-                                        alignment: center;
+                                VerticalLayout {
+                                    width: 100%;
+                                    spacing: 14px;
+
+                                    if root.tab == 0 : VerticalLayout {
+                                        spacing: 6px;
+
+                                        Text {
+                                            text: "the version android runs, and the ones it can run";
+                                            color: Theme.muted;
+                                            font-size: 10px;
+                                            wrap: word-wrap;
+                                        }
+
+                                        for row[i] in root.rows : Rectangle {
+                                            height: 44px;
+                                            border-radius: Theme.radius * 1px;
+                                            background: i == root.selected ? Theme.panel : transparent;
+                                            border-width: 1px;
+                                            border-color: i == root.selected ? Theme.accent : Theme.border;
+
+                                            TouchArea {
+                                                clicked => {
+                                                    root.selected = i;
+                                                }
+                                                mouse-cursor: pointer;
+                                            }
+
+                                            HorizontalLayout {
+                                                padding-left: 12px;
+                                                padding-right: 12px;
+                                                spacing: 8px;
+
+                                                VerticalLayout {
+                                                    alignment: center;
+                                                    horizontal-stretch: 1;
+                                                    spacing: 1px;
+
+                                                    Text {
+                                                        text: row.title;
+                                                        color: row.live ? Theme.accent : Theme.fg;
+                                                        font-size: 12px;
+                                                        overflow: elide;
+                                                    }
+                                                    Text {
+                                                        text: row.subtitle;
+                                                        color: Theme.muted;
+                                                        font-size: 10px;
+                                                        overflow: elide;
+                                                    }
+                                                }
+
+                                                Text {
+                                                    text: row.state;
+                                                    color: row.live ? Theme.accent : Theme.muted;
+                                                    font-size: 11px;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if root.tab == 1 : VerticalLayout {
                                         spacing: 2px;
 
                                         Text {
-                                            text: row.title;
-                                            color: row.live ? Theme.accent : Theme.fg;
-                                            font-size: 13px;
-                                            overflow: elide;
-                                        }
-                                        Text {
-                                            text: row.subtitle;
+                                            text: "keys";
                                             color: Theme.muted;
                                             font-size: 10px;
-                                            overflow: elide;
                                         }
+                                        KeyRow { k: "j / k"; v: "next / previous version"; }
+                                        KeyRow { k: "space, s"; v: "start the selected version"; }
+                                        KeyRow { k: "d"; v: "download it"; }
+                                        KeyRow { k: "x"; v: "stop android"; }
+                                        KeyRow { k: "o"; v: "bring the phone window back"; }
+                                        KeyRow { k: "r"; v: "remove an installed version"; }
+                                        KeyRow { k: "R"; v: "refresh the catalog"; }
+                                        KeyRow { k: ", ?"; v: "open and close these settings"; }
+                                        KeyRow { k: "esc"; v: "close these settings"; }
+                                        KeyRow { k: "q"; v: "quit omadroid"; }
                                     }
 
-                                    Text {
-                                        text: row.state;
-                                        color: Theme.muted;
-                                        font-size: 9px;
-                                        vertical-alignment: center;
+                                    if root.tab == 2 : VerticalLayout {
+                                        spacing: 6px;
+
+                                        Text {
+                                            text: "omadroid " + root.app-version;
+                                            color: Theme.fg;
+                                            font-size: 12px;
+                                        }
+                                        Text {
+                                            text: root.engine-text;
+                                            color: Theme.muted;
+                                            font-size: 10px;
+                                            wrap: word-wrap;
+                                        }
+                                        Text {
+                                            text: "android runs in a container on this kernel, as Waydroid boots it: it is not emulated. switching a version rewrites Waydroid's images_path, so it is a restart, never a copy.";
+                                            color: Theme.muted;
+                                            font-size: 10px;
+                                            wrap: word-wrap;
+                                        }
+                                        Text {
+                                            text: "the phone panel shows Android's own window, moved onto it by Hyprland. a Wayland app cannot host another one's surface, so this is as close as it gets.";
+                                            color: Theme.muted;
+                                            font-size: 10px;
+                                            wrap: word-wrap;
+                                        }
+                                        Text {
+                                            text: "MIT · github.com/abraham-ukachi/omadroid";
+                                            color: Theme.muted;
+                                            font-size: 10px;
+                                            wrap: word-wrap;
+                                        }
                                     }
                                 }
                             }
@@ -339,7 +678,7 @@ export component AppWindow inherits Window {
 
                 // Key hints
                 Rectangle {
-                    height: 44px;
+                    height: 40px;
                     background: Theme.key;
 
                     HorizontalLayout {
@@ -357,7 +696,7 @@ export component AppWindow inherits Window {
                             overflow: elide;
                         }
                         Text {
-                            text: "? keys";
+                            text: ", settings";
                             color: Theme.muted;
                             font-size: 10px;
                             vertical-alignment: center;
@@ -367,9 +706,9 @@ export component AppWindow inherits Window {
             }
         }
 
-        // Help
+        // First run: Waydroid is not on this machine yet.
         Rectangle {
-            visible: root.help;
+            visible: root.needs-setup;
             x: 0px;
             y: 0px;
             width: 100%;
@@ -378,33 +717,100 @@ export component AppWindow inherits Window {
 
             VerticalLayout {
                 padding: 32px;
-                spacing: 9px;
+                spacing: 12px;
 
                 Text {
-                    text: "keys";
-                    color: Theme.accent;
-                    font-size: 12px;
+                    text: "omadroid";
+                    color: Theme.fg;
+                    font-size: 16px;
                     font-weight: 700;
                 }
-                Text { text: "j / k      next / previous version"; color: Theme.fg; font-size: 12px; }
-                Text { text: "space, s   start the selected version"; color: Theme.fg; font-size: 12px; }
-                Text { text: "d          download it first"; color: Theme.fg; font-size: 12px; }
-                Text { text: "x          stop android"; color: Theme.fg; font-size: 12px; }
-                Text { text: "o          bring the phone window back"; color: Theme.fg; font-size: 12px; }
-                Text { text: "r          remove an installed version"; color: Theme.fg; font-size: 12px; }
-                Text { text: "R          refresh the catalog"; color: Theme.fg; font-size: 12px; }
-                Text { text: "?          close this"; color: Theme.fg; font-size: 12px; }
-                Text { text: "q          quit"; color: Theme.fg; font-size: 12px; }
+                Text {
+                    text: "android is not installed on this machine yet";
+                    color: Theme.accent;
+                    font-size: 12px;
+                }
+                Text {
+                    text: root.setup-detail;
+                    color: Theme.fg;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "one button: waydroid from the arch repositories, then the images waydroid downloads itself, about 1.6 GB. it needs root, so sudo or pkexec will ask.";
+                    color: Theme.muted;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
 
-                Rectangle { vertical-stretch: 1; background: transparent; }
+                button := Rectangle {
+                    width: 210px;
+                    height: 40px;
+                    border-radius: Theme.radius * 1px;
+                    background: root.busy ? Theme.panel : (setup-hit.has-hover ? Theme.accent : Theme.fg);
+                    border-width: 1px;
+                    border-color: Theme.accent;
+
+                    Text {
+                        text: "install waydroid";
+                        color: Theme.bg;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    setup-hit := TouchArea {
+                        clicked => {
+                            root.setup();
+                        }
+                        mouse-cursor: pointer;
+                    }
+                }
 
                 Text {
-                    text: "a version change rewrites Waydroid's images_path: a restart, never a copy.";
+                    text: root.status-text;
                     color: Theme.muted;
                     font-size: 10px;
                     wrap: word-wrap;
                 }
+
+                Rectangle {
+                    visible: root.busy;
+                    height: 2px;
+                    background: Theme.border;
+
+                    Rectangle {
+                        width: parent.width * root.progress;
+                        height: 2px;
+                        background: Theme.accent;
+                    }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: transparent;
+                }
+
+                Text {
+                    text: root.notice;
+                    color: Theme.accent;
+                    font-size: 10px;
+                    wrap: word-wrap;
+                }
             }
+        }
+    }
+
+    // The panel's place in the window, for Hyprland. A timer, because nothing
+    // tells us when the layout moved; 250 ms is far below what an eye notices.
+    Timer {
+        interval: 250ms;
+        running: true;
+        triggered => {
+            root.phone-x = phone.absolute-position.x;
+            root.phone-y = phone.absolute-position.y;
+            root.phone-w = phone.width;
+            root.phone-h = phone.height;
         }
     }
 }

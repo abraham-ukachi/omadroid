@@ -10,16 +10,20 @@
 //! the terminal: one Android version per directory, and a four-second swap
 //! between them.
 
+pub mod bootstrap;
 pub mod catalog;
 pub mod config;
+pub mod desktop;
 pub mod engine;
 pub mod install;
 pub mod paths;
 pub mod theme;
 pub mod versions;
 
+pub use bootstrap::Deps;
 pub use catalog::{Release, Variant};
 pub use config::Store;
+pub use desktop::Rect;
 pub use engine::Status;
 pub use install::Progress;
 pub use theme::{Rgb, Theme};

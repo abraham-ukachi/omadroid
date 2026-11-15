@@ -29,6 +29,9 @@ What omadroid adds is everything Waydroid leaves to the terminal:
 - **One Android version per directory**, each with its own `/data`, so your Android 13 apps and your Android 17 apps never meet.
 - **A four-second switch**: Waydroid's `images_path` is rewritten, the data symlink follows, the container restarts. Nothing is copied.
 - **A live catalog** built from the community builds (`WayDroid-ATV/waydroid-builds`): Android 11 through 17, x86_64, downloaded and unpacked for you.
+- **Waydroid installed for you** on first launch, if the machine has none: one button, Arch's `extra` package, then the images Waydroid fetches itself.
+- **Android inside the phone panel**: the phone window is pinned onto the panel and follows omadroid when it moves or resizes, so the phone is the phone.
+- **Settings in the window**: versions, keys, about — and `download` is a button, not a word.
 - **Omarchy's clothes**: the accent is read live from `colors.toml`, corners follow Hyprland's `decoration:rounding`, every key is a shortcut.
 
 > MOTTO: The phone is real. The emulator is not.
@@ -47,9 +50,17 @@ What omadroid adds is everything Waydroid leaves to the terminal:
 There is no image copy and no reboot, which is why it beats every emulator at the one thing you actually do all day: change version.
 
 
+## The phone panel 📲
+
+The phone is the left half of the window: bezel, screen, the whole shape, sized from the window and capped at the height of a real phone. When Android runs, **the Android window sits exactly there** — you type into the phone, it stays above the app while you click the list, and it is dragged along when the omadroid window moves.
+
+How that is done, stated plainly: a Wayland application cannot take another application's surface and paint it as a widget. Slint has no way to host the Waydroid window, and no amount of Rust changes that. So omadroid asks Hyprland instead: the Waydroid window is made floating and pinned, and moved and resized onto the exact rectangle the panel occupies, two pixels inside its accent border. It looks embedded, it behaves embedded, and on a compositor without `hyprctl` it degrades to a normal window (`O` brings it back).
+> MOTTO: A panel you can type into, not a screenshot.
+
+
 ## Installation 📦
 
-Requires **Waydroid** already installed and initialized once (`waydroid init`), a Wayland session, `curl` and `unzip`.
+Requires an Arch system with `pacman`, a Wayland session, `curl` and `unzip`. If Waydroid is not on the machine, the first window offers one button: it installs `waydroid` from Arch's `extra`, enables the container, and runs `waydroid init -f -s GAPPS` — the images (about 1.6 GB) are what Waydroid downloads itself. That needs root, so `sudo -n` is tried first and `pkexec` after it; if neither will take it, the window says which command to run.
 
 ```bash
 cd ~/Work/omadroid
@@ -72,12 +83,13 @@ The app appears in the Omarchy launcher (`Super + Space`) as **omadroid**.
 |:----|:-------|
 | `j` / `k` | Next / previous version |
 | `Space` or `S` | Start the selected version |
-| `D` | Download it first |
+| `D` | Download it (the word `download` in a row does the same) |
 | `X` | Stop Android |
 | `O` | Bring the phone window back |
 | `R` | Remove an installed version |
 | `Shift+R` | Refresh the catalog |
-| `?` | Every shortcut |
+| `,` or `?` | Settings: versions, keys, about |
+| `Esc` | Close the settings |
 | `Q` | Quit |
 
 
@@ -120,6 +132,8 @@ The list is read from GitHub at run time, so a new release shows up without a re
 ## Limits, honestly 🚧
 
 - **One Android version live at a time.** Waydroid has a single container; omadroid makes switching instant, not simultaneous.
+- **The phone panel is Hyprland placement, not embedding.** Wayland gives no application the right to host another's surface. The Android window is pinned and moved onto the panel, so it is genuinely interactive — but on a compositor that is not Hyprland it stays a separate window.
+- **The first-run install is `pacman` plus `waydroid init`.** It is not a vendored runtime; it needs Arch, a network, root, and a kernel with binder (Omarchy has one).
 - **Community images are unofficial.** Android 14, 15, 16 and 17 come from `WayDroid-ATV/waydroid-builds`; a broken release is possible and the window says so instead of hiding it.
 - **Play Store needs GAPPS, and certification still refuses some apps.** No container fixes SafetyNet; banking apps may refuse to run.
 - **No translations yet.** Strings are inline in `ui/app.slint`; the Translator from the Omarchy app guide is the next step.
