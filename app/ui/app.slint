@@ -95,6 +95,41 @@ component Sliders inherits Rectangle {
     }
 }
 
+// The fullscreen icon: the four corners of a frame. Drawn for the same reason
+// the sliders are.
+component Expand inherits Rectangle {
+    width: 30px;
+    height: 30px;
+    border-radius: Theme.radius * 1px;
+    background: hit.has-hover ? Theme.panel : transparent;
+    border-width: 1px;
+    border-color: root.marked ? Theme.accent : Theme.border;
+    in property <bool> marked: false;
+    callback pick();
+
+    property <color> ink: root.marked ? Theme.accent : Theme.fg;
+
+    // Top left
+    Rectangle { x: 10px; y: 10px; width: 5px; height: 1px; background: ink; }
+    Rectangle { x: 10px; y: 10px; width: 1px; height: 5px; background: ink; }
+    // Top right
+    Rectangle { x: 15px; y: 10px; width: 5px; height: 1px; background: ink; }
+    Rectangle { x: 19px; y: 10px; width: 1px; height: 5px; background: ink; }
+    // Bottom left
+    Rectangle { x: 10px; y: 19px; width: 5px; height: 1px; background: ink; }
+    Rectangle { x: 10px; y: 15px; width: 1px; height: 5px; background: ink; }
+    // Bottom right
+    Rectangle { x: 15px; y: 19px; width: 5px; height: 1px; background: ink; }
+    Rectangle { x: 19px; y: 15px; width: 1px; height: 5px; background: ink; }
+
+    hit := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.pick();
+        }
+    }
+}
+
 // One window, one job: pick the Android version, and it is on the desktop.
 export component AppWindow inherits Window {
     title: "omadroid";
@@ -120,6 +155,8 @@ export component AppWindow inherits Window {
     in property <float> progress: 0;
     in-out property <bool> settings: false;
     in-out property <int> tab: 0;
+    // The phone on the whole screen: the bar stays, because it is the way back.
+    in-out property <bool> wide: false;
 
     // Read back by the app, so Hyprland can put Android on the panel.
     in-out property <length> phone-x: 0px;
@@ -197,6 +234,10 @@ export component AppWindow inherits Window {
             root.tab = key == "?" ? 1 : 0;
             return true;
         }
+        if (key == "f") {
+            root.wide = !root.wide;
+            return true;
+        }
         if (key == "q") {
             root.quit();
             return true;
@@ -214,9 +255,17 @@ export component AppWindow inherits Window {
         }
 
         key-pressed(event) => {
-            if (root.settings && (event.text == "Escape" || event.text == ",")) {
-                root.settings = false;
-                return accept;
+            // Escape arrives by name on some runs and as the raw control
+            // character on others.
+            if (event.text == "Escape" || event.text == "\u{1b}") {
+                if (root.wide) {
+                    root.wide = false;
+                    return accept;
+                }
+                if (root.settings) {
+                    root.settings = false;
+                    return accept;
+                }
             }
             if (root.act(event.text)) {
                 return accept;
@@ -232,9 +281,10 @@ export component AppWindow inherits Window {
             VerticalLayout {
                 spacing: 0px;
 
-                // The app bar: name, the version and state under it, settings.
+                // The app bar: name, the version and state under it, fullscreen
+                // and settings. It is slimmer when the phone has the screen.
                 Rectangle {
-                    height: 64px;
+                    height: root.wide ? 44px : 64px;
                     background: Theme.bg;
 
                     HorizontalLayout {
@@ -261,6 +311,18 @@ export component AppWindow inherits Window {
                                 color: root.running ? Theme.accent : Theme.muted;
                                 font-size: 10px;
                                 overflow: elide;
+                            }
+                        }
+
+                        VerticalLayout {
+                            width: 30px;
+                            alignment: center;
+
+                            Expand {
+                                marked: root.wide;
+                                pick => {
+                                    root.wide = !root.wide;
+                                }
                             }
                         }
 
@@ -350,6 +412,7 @@ export component AppWindow inherits Window {
                         }
 
                         Text {
+                            visible: !root.wide;
                             text: "android in a container, not an emulator";
                             color: Theme.muted;
                             font-size: 9px;
@@ -358,8 +421,10 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    // The right column is the list, or the settings pane.
+                    // The right column is the list, or the settings pane. The
+                    // phone has the window in fullscreen, so it goes.
                     VerticalLayout {
+                        visible: !root.wide;
                         horizontal-stretch: 1;
                         vertical-stretch: 1;
                         spacing: 10px;
@@ -600,6 +665,7 @@ export component AppWindow inherits Window {
                                         KeyRow { k: "x"; v: "stop android"; }
                                         KeyRow { k: "o"; v: "bring the phone window back"; }
                                         KeyRow { k: "r"; v: "remove an installed version"; }
+                                        KeyRow { k: "f"; v: "the phone on the whole screen"; }
                                         KeyRow { k: "R"; v: "refresh the catalog"; }
                                         KeyRow { k: ", ?"; v: "open and close these settings"; }
                                         KeyRow { k: "esc"; v: "close these settings"; }
@@ -678,6 +744,7 @@ export component AppWindow inherits Window {
 
                 // Key hints
                 Rectangle {
+                    visible: !root.wide;
                     height: 40px;
                     background: Theme.key;
 

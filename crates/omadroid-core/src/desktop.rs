@@ -34,6 +34,9 @@ pub struct Client {
     pub class: String,
     pub title: String,
     pub rect: Rect,
+    /// The workspace the window sits on. The phone is parked on one of its own
+    /// while another window has the keyboard, and comes back to this one.
+    pub workspace: i64,
     pub floating: bool,
     pub hidden: bool,
     /// Pinned windows float above the tiling layout on every workspace, which
@@ -69,44 +72,56 @@ pub fn parse(json: &str) -> Vec<Client> {
     let Ok(Value::Array(items)) = serde_json::from_str::<Value>(json) else {
         return Vec::new();
     };
-    let number = |value: &Value, key: &str, index: usize| -> i64 {
-        value
-            .get(key)
+    items.iter().filter_map(client).collect()
+}
+
+/// One window out of one entry of `hyprctl clients -j`. `activewindow -j` is the
+/// same entry on its own, so both go through here.
+fn client(item: &Value) -> Option<Client> {
+    let address = item.get("address")?.as_str()?.to_string();
+    let field = |key: &str| {
+        item.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let number = |key: &str, index: usize| -> i64 {
+        item.get(key)
             .and_then(Value::as_array)
             .and_then(|pair| pair.get(index))
             .and_then(Value::as_f64)
             .unwrap_or(0.0) as i64
     };
+    Some(Client {
+        address,
+        class: field("class"),
+        title: field("title"),
+        rect: Rect {
+            x: number("at", 0),
+            y: number("at", 1),
+            w: number("size", 0),
+            h: number("size", 1),
+        },
+        workspace: item
+            .get("workspace")
+            .and_then(|workspace| workspace.get("id"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+        floating: item
+            .get("floating")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        hidden: item.get("hidden").and_then(Value::as_bool).unwrap_or(false),
+        pinned: item.get("pinned").and_then(Value::as_bool).unwrap_or(false),
+    })
+}
 
-    items
-        .iter()
-        .filter_map(|item| {
-            let address = item.get("address")?.as_str()?.to_string();
-            let field = |key: &str| {
-                item.get(key)
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string()
-            };
-            Some(Client {
-                address,
-                class: field("class"),
-                title: field("title"),
-                rect: Rect {
-                    x: number(item, "at", 0),
-                    y: number(item, "at", 1),
-                    w: number(item, "size", 0),
-                    h: number(item, "size", 1),
-                },
-                floating: item
-                    .get("floating")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                hidden: item.get("hidden").and_then(Value::as_bool).unwrap_or(false),
-                pinned: item.get("pinned").and_then(Value::as_bool).unwrap_or(false),
-            })
-        })
-        .collect()
+/// The window with the keyboard. `hyprctl` answers `{}` when there is none, and
+/// an empty answer is not a window.
+pub fn active() -> Option<Client> {
+    let json = engine::run("hyprctl", &["-j", "activewindow"]).ok()?;
+    let value: Value = serde_json::from_str(&json).ok()?;
+    client(&value)
 }
 
 /// omadroid's own window: the Slint window is undecorated and has no class, so
@@ -132,13 +147,7 @@ pub fn device() -> Option<Client> {
 /// window positions are counted in. Sizing the window from the physical numbers
 /// hangs it off the bottom of the screen.
 pub fn screen() -> Option<Rect> {
-    let json = engine::run("hyprctl", &["-j", "monitors"]).ok()?;
-    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&json) else {
-        return None;
-    };
-    let monitor = items
-        .iter()
-        .find(|monitor| monitor.get("focused").and_then(Value::as_bool).unwrap_or(false))?;
+    let monitor = focused_monitor()?;
     let number = |key: &str| monitor.get(key).and_then(Value::as_f64).unwrap_or(0.0);
     let scale = number("scale").max(0.5);
     Some(Rect {
@@ -147,6 +156,44 @@ pub fn screen() -> Option<Rect> {
         w: (number("width") / scale) as i64,
         h: (number("height") / scale) as i64,
     })
+}
+
+/// The focused monitor's scale factor: 1.5 here, so a 1920x1080 screen has
+/// 1280x720 of layout but 1920x1080 of pixels.
+pub fn scale() -> f64 {
+    focused_monitor()
+        .and_then(|monitor| monitor.get("scale").and_then(Value::as_f64))
+        .unwrap_or(1.0)
+        .max(0.5)
+}
+
+/// The workspace the user is looking at, by id. The phone comes back to this
+/// one, and omadroid's own window returns here if it was left parked.
+pub fn current_workspace() -> Option<i64> {
+    let json = engine::run("hyprctl", &["-j", "activeworkspace"]).ok()?;
+    let value: Value = serde_json::from_str(&json).ok()?;
+    value.get("id").and_then(Value::as_i64)
+}
+
+/// Gives a window the keyboard.
+pub fn focus(client: &Client) -> Result<(), String> {
+    let address = &client.address;
+    send(
+        "focus",
+        address,
+        "",
+        &format!("focuswindow address:{address}"),
+    )
+}
+
+fn focused_monitor() -> Option<Value> {
+    let json = engine::run("hyprctl", &["-j", "monitors"]).ok()?;
+    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&json) else {
+        return None;
+    };
+    items
+        .into_iter()
+        .find(|monitor| monitor.get("focused").and_then(Value::as_bool).unwrap_or(false))
 }
 
 /// `hl.dsp.window.move({ window = hl.get_window("address:0x…"), x = 10 })`.
@@ -192,6 +239,13 @@ pub fn shape_host(host: &Client) -> Result<(), String> {
         HOST_W.min((screen.w - 40).max(520)),
         HOST_H.min((screen.h - 40).max(520)),
     );
+    // A window left on the parked workspace by an earlier run is only visible
+    // while that workspace is: put it back on the one the user is looking at.
+    if host.workspace < 0 {
+        if let Some(workspace) = current_workspace() {
+            let _ = unpark(host, workspace);
+        }
+    }
     // omadroid's own window is not pinned: only the phone floats above the
     // tiling layout.
     let _ = send(
@@ -226,6 +280,53 @@ pub fn shape_host(host: &Client) -> Result<(), String> {
 
 /// Moves and resizes the phone window onto `rect`, and keeps it above the
 /// tiling layout so omadroid's own window can stay focused underneath.
+/// Moves and resizes a window onto `rect`, and nothing else: this is what puts
+/// omadroid's own window on the whole monitor in fullscreen, and back.
+pub fn frame(client: &Client, rect: Rect) -> Result<(), String> {
+    let address = &client.address;
+    let (w, h) = (rect.w.max(1), rect.h.max(1));
+    send(
+        "resize",
+        address,
+        &format!("x = {w}, y = {h}"),
+        &format!("resizewindowpixel exact {w} {h},address:{address}"),
+    )?;
+    send(
+        "move",
+        address,
+        &format!("x = {}, y = {}", rect.x, rect.y),
+        &format!("movewindowpixel exact {} {},address:{address}", rect.x, rect.y),
+    )
+}
+
+/// Where the phone waits while another window has the keyboard. A tiling
+/// compositor cannot hide a window, but a workspace nobody is looking at is the
+/// same thing from the outside.
+pub const PARKED: &str = "special:omadroid";
+
+/// Parks the phone out of sight. Its rectangle is not kept on the way, so the
+/// caller places it again when it comes back.
+pub fn park(client: &Client) -> Result<(), String> {
+    let address = &client.address;
+    send(
+        "move",
+        address,
+        &format!("workspace = \"{PARKED}\""),
+        &format!("movetoworkspacesilent {PARKED},address:{address}"),
+    )
+}
+
+/// Brings the parked phone back to the workspace omadroid itself is on.
+pub fn unpark(client: &Client, workspace: i64) -> Result<(), String> {
+    let address = &client.address;
+    send(
+        "move",
+        address,
+        &format!("workspace = \"{workspace}\""),
+        &format!("movetoworkspacesilent {workspace},address:{address}"),
+    )
+}
+
 pub fn place(client: &Client, rect: Rect) -> Result<(), String> {
     let address = &client.address;
     let (w, h) = (rect.w.max(1), rect.h.max(1));
@@ -333,6 +434,23 @@ mod tests {
     fn rubbish_is_no_window_at_all() {
         assert!(parse("not json").is_empty());
         assert!(parse("[]").is_empty());
+    }
+
+    #[test]
+    fn a_window_knows_its_workspace() {
+        let clients = parse(CLIENTS);
+        assert_eq!(clients[0].workspace, 0);
+        let json = r#"[{"address":"0x3","class":"waydroid","title":"Android",
+                        "at":[0,0],"size":[1,1],"workspace":{"id":5,"name":"5"}}]"#;
+        assert_eq!(parse(json)[0].workspace, 5);
+    }
+
+    #[test]
+    fn parking_is_a_silent_move_to_its_own_workspace() {
+        assert_eq!(
+            call("move", "0xabc", &format!("workspace = \"{PARKED}\"")),
+            "hl.dsp.window.move({ window = hl.get_window(\"address:0xabc\"), workspace = \"special:omadroid\" })"
+        );
     }
 
     #[test]

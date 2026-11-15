@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/omadroid-core", "app"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Abraham Ukachi <abraham.ukachi@laplateforme.io>"]
 license = "MIT"

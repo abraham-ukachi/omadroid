@@ -31,6 +31,8 @@ What omadroid adds is everything Waydroid leaves to the terminal:
 - **A live catalog** built from the community builds (`WayDroid-ATV/waydroid-builds`): Android 11 through 17, x86_64, downloaded and unpacked for you.
 - **Waydroid installed for you** on first launch, if the machine has none: one button, Arch's `extra` package, then the images Waydroid fetches itself.
 - **Android inside the phone panel**: the phone window is pinned onto the panel and follows omadroid when it moves or resizes, so the phone is the phone.
+- **Fullscreen phone**: the button beside settings (or `f`) gives the phone the whole monitor, `esc` gives it back.
+- **Out of the way when you leave**: when another window takes the keyboard the phone parks itself on `special:omadroid` and is placed again when omadroid has it back.
 - **Settings in the window**: versions, keys, about — and `download` is a button, not a word.
 - **Omarchy's clothes**: the accent is read live from `colors.toml`, corners follow Hyprland's `decoration:rounding`, every key is a shortcut.
 
@@ -55,6 +57,10 @@ There is no image copy and no reboot, which is why it beats every emulator at th
 The phone is the left half of the window: bezel, screen, the whole shape, sized from the window and capped at the height of a real phone. When Android runs, **the Android window sits exactly there** — you type into the phone, it stays above the app while you click the list, and it is dragged along when the omadroid window moves.
 
 How that is done, stated plainly: a Wayland application cannot take another application's surface and paint it as a widget. Slint has no way to host the Waydroid window, and no amount of Rust changes that. So omadroid asks Hyprland instead: the Waydroid window is made floating and pinned, and moved and resized onto the exact rectangle the panel occupies, two pixels inside its accent border. It looks embedded, it behaves embedded, and on a compositor without `hyprctl` it degrades to a normal window (`O` brings it back).
+Android draws at the resolution its own display reports — 1920x1080 here — and the compositor scales that buffer to the window. That is what makes the phone look zoomed and cut off at panel size, and it is measured, not guessed: `waydroid shell wm size 720x1536` (or 357x765, or 238x510) does move Android's display, but Waydroid's window then paints pure black until the override is reset. A phone the right shape and black is worse than one the wrong shape and visible, so omadroid leaves the display alone until Waydroid can be restarted at the new size, which is a bigger piece of work than a window resize.
+
+The phone also leaves when you do: it is pinned above the tiling layout, so when another window takes the keyboard it is parked on `special:omadroid`, and comes back — placed again, because the compositor does not keep its rectangle — the moment omadroid has the keyboard. One caveat, measured: Waydroid's own window asks for focus by itself, pinned or not, so on a machine where it keeps doing that the park never triggers and the phone stays where it is.
+
 > MOTTO: A panel you can type into, not a screenshot.
 
 
@@ -132,6 +138,8 @@ The list is read from GitHub at run time, so a new release shows up without a re
 ## Limits, honestly 🚧
 
 - **One Android version live at a time.** Waydroid has a single container; omadroid makes switching instant, not simultaneous.
+- **The panel scales Android rather than matching it.** `wm size` sets the display, but Waydroid renders the window black afterwards; matching the two needs Waydroid restarted at the panel's size.
+- **The phone can keep the keyboard.** Waydroid's window asks for focus itself, so clicking another window does not always take it — and the park-on-blur relies on exactly that.
 - **The phone panel is Hyprland placement, not embedding.** Wayland gives no application the right to host another's surface. The Android window is pinned and moved onto the panel, so it is genuinely interactive — but on a compositor that is not Hyprland it stays a separate window.
 - **The first-run install is `pacman` plus `waydroid init`.** It is not a vendored runtime; it needs Arch, a network, root, and a kernel with binder (Omarchy has one).
 - **Community images are unofficial.** Android 14, 15, 16 and 17 come from `WayDroid-ATV/waydroid-builds`; a broken release is possible and the window says so instead of hiding it.
