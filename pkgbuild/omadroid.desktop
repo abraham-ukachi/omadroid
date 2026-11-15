@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=omadroid
+Comment=Android in a container, one version per key
+Exec=omadroid
+Icon=omadroid
+Terminal=false
+Categories=Development;Utility;
+Keywords=android;waydroid;emulator;phone;
+StartupWMClass=omadroid

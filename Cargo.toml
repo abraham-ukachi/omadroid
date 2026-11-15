@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/omadroid-core", "app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Abraham Ukachi <abraham.ukachi@laplateforme.io>"]
+license = "MIT"
+repository = "https://github.com/abraham-ukachi/omadroid"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

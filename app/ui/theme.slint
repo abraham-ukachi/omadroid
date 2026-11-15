@@ -1,0 +1,15 @@
+// The Omarchy theme, painted the Omacalc way.
+// Rust sets every color from `omadroid_core::Theme` (background, foreground, accent and their mixes).
+
+export global Theme {
+    in property <color> bg: #2c2525;
+    in property <color> fg: #e6d9db;
+    in property <color> accent: #f38d70;
+    // Mixes of the foreground into the background (see crates/omadroid-core/src/theme.rs).
+    in property <color> key: #332c2c;      // 5%
+    in property <color> border: #3d3535;   // 13%
+    in property <color> panel: #3d3535;    // 16%
+    in property <color> muted: #8a7f80;    // 50%
+    // Hyprland's decoration:rounding, so panels match the windows.
+    in property <float> radius: 0;
+}

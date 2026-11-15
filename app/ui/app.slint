@@ -1,0 +1,410 @@
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import "fonts/iAWriterMonoS-Regular.ttf";
+
+export { Theme }
+
+export struct VersionRow {
+    id: string,
+    title: string,
+    subtitle: string,
+    state: string,
+    live: bool,
+}
+
+// One window, one job: pick the Android version, and it is on the desktop.
+export component AppWindow inherits Window {
+    title: "omadroid";
+    preferred-width: 460px;
+    preferred-height: 820px;
+    min-width: 420px;
+    min-height: 640px;
+    background: Theme.bg;
+    default-font-family: "iA Writer Mono S";
+    default-font-size: 13px;
+
+    in property <[VersionRow]> rows;
+    in-out property <int> selected: 0;
+    in property <string> status-text: "starting";
+    in property <string> notice: "";
+    in property <bool> running: false;
+    in property <bool> busy: false;
+    in property <float> progress: 0;
+    in-out property <bool> help: false;
+
+    callback refresh();
+    callback launch(string);
+    callback stop();
+    callback install(string);
+    callback remove(string);
+    callback show-ui();
+    callback quit();
+
+    // Space (or S) starts the selected version, which is the whole point.
+    public function primary() -> bool {
+        if (root.rows.length == 0) {
+            return false;
+        }
+        root.launch(root.rows[root.selected].id);
+        return true;
+    }
+
+    public function act(key: string) -> bool {
+        if (key == "j") {
+            if (root.selected + 1 < root.rows.length) {
+                root.selected = root.selected + 1;
+            }
+            return true;
+        }
+        if (key == "k") {
+            if (root.selected > 0) {
+                root.selected = root.selected - 1;
+            }
+            return true;
+        }
+        if (key == " " || key == "s") {
+            return root.primary();
+        }
+        if (key == "d") {
+            if (root.rows.length > 0) {
+                root.install(root.rows[root.selected].id);
+            }
+            return true;
+        }
+        if (key == "x") {
+            root.stop();
+            return true;
+        }
+        if (key == "r") {
+            if (root.rows.length > 0) {
+                root.remove(root.rows[root.selected].id);
+            }
+            return true;
+        }
+        if (key == "o") {
+            root.show-ui();
+            return true;
+        }
+        if (key == "R") {
+            root.refresh();
+            return true;
+        }
+        if (key == "?") {
+            root.help = true;
+            return true;
+        }
+        if (key == "q") {
+            root.quit();
+            return true;
+        }
+        return false;
+    }
+
+    // The keyboard is the app: the FocusScope takes every key the window gets.
+    keys := FocusScope {
+        width: 100%;
+        height: 100%;
+
+        init => {
+            keys.focus();
+        }
+
+        key-pressed(event) => {
+            if (root.help) {
+                if (event.text == "?" || event.text == "q") {
+                    root.help = false;
+                }
+                return accept;
+            }
+            if (root.act(event.text)) {
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: Theme.bg;
+
+            VerticalLayout {
+                spacing: 0px;
+
+                // Title bar
+                Rectangle {
+                    height: 56px;
+                    background: Theme.bg;
+
+                    HorizontalLayout {
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        spacing: 10px;
+                        alignment: start;
+
+                        Text {
+                            text: "omadroid";
+                            color: Theme.fg;
+                            font-size: 15px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+
+                        // The accent is the whole state signal: running or not.
+                        Text {
+                            text: root.status-text;
+                            color: root.running ? Theme.accent : Theme.muted;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border;
+                }
+
+                // The phone and the list
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 10px;
+                    padding-bottom: 8px;
+                    spacing: 18px;
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        width: 152px;
+                        spacing: 10px;
+                        alignment: start;
+
+                        Rectangle {
+                            width: 152px;
+                            height: 320px;
+                            border-radius: Theme.radius * 1px;
+                            background: Theme.key;
+                            border-width: 2px;
+                            border-color: root.running ? Theme.accent : Theme.border;
+
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 10px;
+
+                                Rectangle {
+                                    height: 12px;
+                                    background: transparent;
+
+                                    Text {
+                                        text: root.running ? "live" : "stopped";
+                                        color: root.running ? Theme.accent : Theme.muted;
+                                        font-size: 10px;
+                                        horizontal-alignment: center;
+                                    }
+                                }
+
+                                // The home screen: twelve app tiles.
+                                VerticalLayout {
+                                    spacing: 7px;
+
+                                    for band in 3 : HorizontalLayout {
+                                        spacing: 7px;
+
+                                        for tile in 4 : Rectangle {
+                                            height: 26px;
+                                            border-radius: Theme.radius * 1px;
+                                            background: root.running ? Theme.panel : Theme.key;
+                                            border-width: 1px;
+                                            border-color: Theme.border;
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    vertical-stretch: 1;
+                                    background: transparent;
+                                }
+
+                                Text {
+                                    text: root.status-text;
+                                    color: Theme.muted;
+                                    font-size: 10px;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: "android in a container, not an emulator";
+                            color: Theme.muted;
+                            font-size: 9px;
+                            wrap: word-wrap;
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    VerticalLayout {
+                        vertical-stretch: 1;
+                        spacing: 6px;
+
+                        Text {
+                            text: "versions";
+                            color: Theme.muted;
+                            font-size: 10px;
+                        }
+
+                        ListView {
+                            vertical-stretch: 1;
+
+                            for row[i] in root.rows : Rectangle {
+                                height: 58px;
+                                border-radius: Theme.radius * 1px;
+                                background: i == root.selected ? Theme.panel : transparent;
+                                border-width: 1px;
+                                border-color: Theme.border;
+
+                                TouchArea {
+                                    clicked => {
+                                        root.selected = i;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    padding-left: 12px;
+                                    padding-right: 12px;
+                                    spacing: 8px;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: 2px;
+
+                                        Text {
+                                            text: row.title;
+                                            color: row.live ? Theme.accent : Theme.fg;
+                                            font-size: 13px;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: row.subtitle;
+                                            color: Theme.muted;
+                                            font-size: 10px;
+                                            overflow: elide;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: row.state;
+                                        color: Theme.muted;
+                                        font-size: 9px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // What went wrong, if anything
+                Rectangle {
+                    visible: root.notice != "";
+                    height: root.notice == "" ? 0px : 30px;
+                    background: Theme.key;
+
+                    Text {
+                        x: 20px;
+                        width: parent.width - 40px;
+                        height: parent.height;
+                        text: root.notice;
+                        color: Theme.accent;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+
+                // The download bar
+                Rectangle {
+                    visible: root.busy;
+                    height: root.busy ? 2px : 0px;
+                    background: Theme.border;
+
+                    Rectangle {
+                        width: parent.width * root.progress;
+                        height: 2px;
+                        background: Theme.accent;
+                    }
+                }
+
+                // Key hints
+                Rectangle {
+                    height: 44px;
+                    background: Theme.key;
+
+                    HorizontalLayout {
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        spacing: 14px;
+                        alignment: start;
+
+                        Text {
+                            text: "space start · d download · x stop";
+                            color: Theme.muted;
+                            font-size: 10px;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: "? keys";
+                            color: Theme.muted;
+                            font-size: 10px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Help
+        Rectangle {
+            visible: root.help;
+            x: 0px;
+            y: 0px;
+            width: 100%;
+            height: 100%;
+            background: Theme.bg;
+
+            VerticalLayout {
+                padding: 32px;
+                spacing: 9px;
+
+                Text {
+                    text: "keys";
+                    color: Theme.accent;
+                    font-size: 12px;
+                    font-weight: 700;
+                }
+                Text { text: "j / k      next / previous version"; color: Theme.fg; font-size: 12px; }
+                Text { text: "space, s   start the selected version"; color: Theme.fg; font-size: 12px; }
+                Text { text: "d          download it first"; color: Theme.fg; font-size: 12px; }
+                Text { text: "x          stop android"; color: Theme.fg; font-size: 12px; }
+                Text { text: "o          bring the phone window back"; color: Theme.fg; font-size: 12px; }
+                Text { text: "r          remove an installed version"; color: Theme.fg; font-size: 12px; }
+                Text { text: "R          refresh the catalog"; color: Theme.fg; font-size: 12px; }
+                Text { text: "?          close this"; color: Theme.fg; font-size: 12px; }
+                Text { text: "q          quit"; color: Theme.fg; font-size: 12px; }
+
+                Rectangle { vertical-stretch: 1; background: transparent; }
+
+                Text {
+                    text: "a version change rewrites Waydroid's images_path: a restart, never a copy.";
+                    color: Theme.muted;
+                    font-size: 10px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}

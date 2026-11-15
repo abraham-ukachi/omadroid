@@ -1,0 +1,23 @@
+[package]
+name = "omadroid"
+description = "A dead-simple Android phone for Omarchy, one version per key"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["rlib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "omadroid"
+path = "src/main.rs"
+
+[dependencies]
+omadroid-core = { path = "../crates/omadroid-core" }
+slint = "1"
+
+[build-dependencies]
+slint-build = "1"
