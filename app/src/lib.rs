@@ -11,7 +11,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use omadroid_core::catalog::{self, Release};
@@ -24,6 +24,10 @@ use slint::{ModelRc, Timer, TimerMode, VecModel};
 slint::include_modules!();
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// `waydroid --version` costs a Python start, and the answer cannot change
+/// while the app runs: asked once, remembered.
+static WAYDROID_VERSION: OnceLock<Option<String>> = OnceLock::new();
 
 /// How often the phone window is nudged back onto the panel.
 const RING: Duration = Duration::from_millis(400);
@@ -84,7 +88,7 @@ fn engine_line(deps: &bootstrap::Deps, status: &engine::Status) -> String {
     if !deps.waydroid {
         return "waydroid is not installed".to_string();
     }
-    let mut parts = vec![match engine::version() {
+    let mut parts = vec![match WAYDROID_VERSION.get_or_init(engine::version) {
         Some(version) => format!("waydroid {version}"),
         None => "waydroid".to_string(),
     }];
@@ -558,6 +562,18 @@ pub fn run() -> Result<(), slint::PlatformError> {
             *current = panel;
         }
     });
+
+    // Android can be started from outside omadroid, and a switch can be slow to
+    // answer: the state is re-read every few seconds, not only on a click.
+    {
+        let tx = cmd_tx.clone();
+        let state = Timer::default();
+        state.start(TimerMode::Repeated, Duration::from_secs(5), move || {
+            let _ = tx.send(Cmd::Refresh);
+        });
+        // The timer has to outlive `run`: it is started before the event loop.
+        std::mem::forget(state);
+    }
 
     let weak = ui.as_weak();
     let colours = Timer::default();
