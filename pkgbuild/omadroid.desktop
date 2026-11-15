@@ -5,6 +5,6 @@ Comment=Android in a container, one version per key
 Exec=omadroid
 Icon=omadroid
 Terminal=false
-Categories=Development;Utility;
+Categories=Development;
 Keywords=android;waydroid;emulator;phone;
 StartupWMClass=omadroid
