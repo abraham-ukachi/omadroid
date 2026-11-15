@@ -3,3 +3,5 @@
 /pkgbuild/src
 /pkgbuild/pkg
 /pkgbuild/*.pkg.tar.zst
+/pkgbuild/omadroid
+/pkgbuild/*.log
