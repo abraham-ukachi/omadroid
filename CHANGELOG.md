@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. Versions follow [SemVer](https://semver.org), see [CONTRIBUTING.md](./CONTRIBUTING.md#git-commit-messages) for the commit guidelines.
 
+## [0.3.1] - 2026-11-15
+
+### Fixed
+- :bug: The phone keeps the keyboard after it is moved: on Hyprland 0.56 `hl.dsp.window.focus` does not exist, and the failed call looked like success. So the phone counted as the focused window and never parked itself.
+- :bug: A parked phone is unpinned, so it cannot float over the workspace the user moved to, and the keyboard is handed back to the window that had it.
+- :bug: The phone is placed as soon as its window exists, instead of floating at its own 1280x720 while Waydroid's status catches up.
+
 ## [0.3.0] - 2026-11-15
 
 ### Added

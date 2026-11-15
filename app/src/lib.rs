@@ -362,7 +362,7 @@ fn close(a: Rect, b: Rect) -> bool {
 /// the end: putting the phone on the panel, taking it away when another window
 /// has the keyboard, and telling Android to render at the panel's size. It only
 /// talks to Hyprland when one of those disagrees with what is on screen.
-fn follow(phone: Arc<Mutex<Phone>>, live: Arc<AtomicBool>, fullscreen: Arc<AtomicBool>) {
+fn follow(phone: Arc<Mutex<Phone>>, fullscreen: Arc<AtomicBool>) {
     if !desktop::available() {
         eprintln!("omadroid: hyprctl is not there, so android keeps its own window");
         return;
@@ -423,7 +423,10 @@ fn follow(phone: Arc<Mutex<Phone>>, live: Arc<AtomicBool>, fullscreen: Arc<Atomi
             parked = false;
             continue;
         };
-        if !live.load(Ordering::Relaxed) || window.hidden {
+        // The window being there is the signal: Waydroid's own status can still
+        // say "stopped" for a few seconds after `show-full-ui`, and gating on it
+        // left the phone floating at its own 1280x720 for ten seconds at a time.
+        if window.hidden {
             continue;
         }
 
@@ -440,6 +443,18 @@ fn follow(phone: Arc<Mutex<Phone>>, live: Arc<AtomicBool>, fullscreen: Arc<Atomi
                 if let Err(error) = desktop::park(&device) {
                     eprintln!("omadroid: cannot hide the phone window: {error}");
                 }
+                // Moving the phone hands it the keyboard, and a phone that keeps
+                // the keyboard counts as focused: it would be brought straight
+                // back. Give it to the window the user actually chose.
+                if let Some(active) = &focused {
+                    std::thread::sleep(Duration::from_millis(120));
+                    if desktop::active()
+                        .map(|now| now.address == device.address)
+                        .unwrap_or(false)
+                    {
+                        let _ = desktop::focus(active);
+                    }
+                }
             }
             continue;
         }
@@ -450,6 +465,15 @@ fn follow(phone: Arc<Mutex<Phone>>, live: Arc<AtomicBool>, fullscreen: Arc<Atomi
             let workspace = desktop::current_workspace().unwrap_or(window.workspace);
             if let Err(error) = desktop::unpark(&device, workspace) {
                 eprintln!("omadroid: cannot bring the phone window back: {error}");
+            }
+            // Coming back means omadroid has the keyboard: the phone should sit
+            // in the panel, not hold the keys.
+            std::thread::sleep(Duration::from_millis(120));
+            if desktop::active()
+                .map(|now| now.address == device.address)
+                .unwrap_or(false)
+            {
+                let _ = desktop::focus(&window);
             }
             continue;
         }
@@ -477,23 +501,33 @@ fn follow(phone: Arc<Mutex<Phone>>, live: Arc<AtomicBool>, fullscreen: Arc<Atomi
         // can be restarted at the new size.
 
         if !close(device.rect, target) {
+            // Who had the keyboard before the phone was moved. Moving a window
+            // hands it the keyboard on this compositor, so this is the only
+            // moment it can be given back to the right window.
+            let host_had_it = focused
+                .as_ref()
+                .map(|active| active.address == window.address)
+                .unwrap_or(false);
+            let phone_had_it = focused
+                .as_ref()
+                .map(|active| active.address == device.address)
+                .unwrap_or(false);
             if let Err(error) = desktop::place(&device, target) {
                 if !warned {
                     eprintln!("omadroid: cannot place the phone window: {error}");
                     warned = true;
                 }
             }
-            // Resizing a window can hand it the keyboard. The keyboard belongs
-            // to whoever had it, and to the phone only when it was clicked.
-            let was_ours = focused
-                .as_ref()
-                .map(|active| active.address == window.address)
-                .unwrap_or(false);
-            let kept = desktop::active()
-                .map(|active| active.address == window.address)
-                .unwrap_or(false);
-            if was_ours && !kept {
-                let _ = desktop::focus(&window);
+            // A phone that keeps the keyboard would also keep counting as the
+            // focused window, and then leaving omadroid would never be seen.
+            if host_had_it && !phone_had_it {
+                std::thread::sleep(Duration::from_millis(120));
+                let kept = desktop::active()
+                    .map(|active| active.address == window.address)
+                    .unwrap_or(false);
+                if !kept {
+                    let _ = desktop::focus(&window);
+                }
             }
         }
         // Above the tiling layout, so clicking the list does not bury the
@@ -543,11 +577,10 @@ pub fn run() -> Result<(), slint::PlatformError> {
     let fullscreen = Arc::new(AtomicBool::new(false));
     {
         let phone = Arc::clone(&phone);
-        let live = Arc::clone(&live);
         let fullscreen = Arc::clone(&fullscreen);
         std::thread::Builder::new()
             .name("phone".into())
-            .spawn(move || follow(phone, live, fullscreen))
+            .spawn(move || follow(phone, fullscreen))
             .expect("the phone thread starts");
     }
 

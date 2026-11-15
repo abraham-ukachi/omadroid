@@ -175,15 +175,25 @@ pub fn current_workspace() -> Option<i64> {
     value.get("id").and_then(Value::as_i64)
 }
 
+/// The Lua that gives a window the keyboard. `hl.dsp.focus` is the dispatcher
+/// that takes a window; `hl.dsp.window.focus` does not exist on 0.56, and
+/// calling it returns an error that looks like a success to anything reading
+/// only the exit code.
+pub fn focus_call(address: &str) -> String {
+    format!("hl.dsp.focus({{ window = hl.get_window(\"address:{address}\") }})")
+}
+
 /// Gives a window the keyboard.
 pub fn focus(client: &Client) -> Result<(), String> {
     let address = &client.address;
-    send(
-        "focus",
-        address,
-        "",
-        &format!("focuswindow address:{address}"),
-    )
+    let lua = focus_call(address);
+    if let Ok(out) = engine::run("hyprctl", &["dispatch", &lua]) {
+        if !out.trim_start().starts_with("error") {
+            return Ok(());
+        }
+    }
+    engine::run("hyprctl", &["dispatch", &format!("focuswindow address:{address}")])
+        .map(|_| ())
 }
 
 fn focused_monitor() -> Option<Value> {
@@ -306,8 +316,18 @@ pub const PARKED: &str = "special:omadroid";
 
 /// Parks the phone out of sight. Its rectangle is not kept on the way, so the
 /// caller places it again when it comes back.
+///
+/// Unpinned on the way out: a pinned window is shown on every workspace, and a
+/// special workspace is no exception, so staying pinned would keep the phone on
+/// screen while it is meant to be away.
 pub fn park(client: &Client) -> Result<(), String> {
     let address = &client.address;
+    let _ = send(
+        "pin",
+        address,
+        "action = \"unset\"",
+        &format!("unpin address:{address}"),
+    );
     send(
         "move",
         address,
@@ -450,6 +470,14 @@ mod tests {
         assert_eq!(
             call("move", "0xabc", &format!("workspace = \"{PARKED}\"")),
             "hl.dsp.window.move({ window = hl.get_window(\"address:0xabc\"), workspace = \"special:omadroid\" })"
+        );
+    }
+
+    #[test]
+    fn focusing_uses_the_dispatcher_that_takes_a_window() {
+        assert_eq!(
+            focus_call("0xabc"),
+            "hl.dsp.focus({ window = hl.get_window(\"address:0xabc\") })"
         );
     }
 
