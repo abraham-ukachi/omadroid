@@ -8,7 +8,8 @@ arch=('x86_64')
 url="https://github.com/abraham-ukachi/omadroid"
 license=('MIT')
 depends=('waydroid' 'curl' 'unzip' 'hicolor-icon-theme')
-makedepends=('rust' 'cargo')
+# The toolchain is rustup's, so there is no distro rust package to ask for.
+makedepends=()
 source=("$pkgname::git+file://$startdir/..")
 sha256sums=('SKIP')
 
